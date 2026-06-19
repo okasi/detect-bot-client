@@ -39,7 +39,14 @@ describe("patchright behavioral analysis exports in browser", () => {
     });
 
     expect(result.suspicionScore).toBeGreaterThan(0);
-    expect(result.isLegitClient).toBe(false);
+    expect(
+      result.signals.some(
+        (signal: { id: string; triggered: boolean }) =>
+          signal.id === "linear-mouse-movement" && signal.triggered,
+      ),
+    ).toBe(true);
+    // A single medium-weight signal stays below the default 0.55 threshold.
+    expect(result.isLegitClient).toBe(true);
 
     await context.close();
   });

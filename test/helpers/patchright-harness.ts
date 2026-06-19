@@ -125,14 +125,151 @@ export async function runBehavioralObserve(
   isLegitClient: boolean;
   signals: Array<{ id: string; triggered: boolean }>;
 }> {
+  return runBehavioralScenario(page, "idle", durationMs, scoreThreshold);
+}
+
+export type BehavioralScenario =
+  | "idle"
+  | "linear-mouse"
+  | "teleport-mouse"
+  | "linear-scroll"
+  | "linear-typing"
+  | "click-without-mouse"
+  | "synthetic-click"
+  | "robotic-combo"
+  | "organic-combo";
+
+export async function runBehavioralScenario(
+  page: Page,
+  scenario: BehavioralScenario,
+  observeMs: number,
+  scoreThreshold = 0.55,
+): Promise<{
+  suspicionScore: number;
+  isLegitClient: boolean;
+  signals: Array<{ id: string; triggered: boolean }>;
+  sampleCounts?: {
+    mouseMoves: number;
+    scrolls: number;
+    keyPresses: number;
+    clicks: number;
+  };
+  observationMs?: number;
+}> {
   return page.evaluate(
-    async ({ observeMs, threshold }) => {
+    async ({ activeScenario, durationMs, threshold }) => {
       const detection = window.__detection;
       const detector = detection.createBehavioralClientDetector({
         context: window,
         scoreThreshold: threshold,
       });
-      const result = await detector.observe(observeMs);
+
+      const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+      const dispatchMouseMove = (x: number, y: number) => {
+        window.dispatchEvent(
+          new MouseEvent("mousemove", { clientX: x, clientY: y, bubbles: true }),
+        );
+      };
+
+      const dispatchWheel = (deltaY: number) => {
+        window.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true }));
+      };
+
+      const dispatchKeyDown = () => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+      };
+
+      const dispatchClick = (x: number, y: number) => {
+        const target = document.getElementById("click-target") ?? window;
+        target.dispatchEvent(
+          new MouseEvent("click", { clientX: x, clientY: y, bubbles: true }),
+        );
+      };
+
+      detector.start();
+
+      switch (activeScenario) {
+        case "linear-mouse":
+          for (let step = 1; step <= 12; step += 1) {
+            dispatchMouseMove(step * 40, step * 20);
+            await sleep(16);
+          }
+          break;
+        case "teleport-mouse":
+          dispatchMouseMove(10, 10);
+          await sleep(5);
+          dispatchMouseMove(900, 500);
+          break;
+        case "linear-scroll":
+          for (let step = 0; step < 6; step += 1) {
+            dispatchWheel(120);
+            await sleep(100);
+          }
+          break;
+        case "linear-typing":
+          for (const _char of "automated-input") {
+            dispatchKeyDown();
+            await sleep(50);
+          }
+          break;
+        case "click-without-mouse":
+          dispatchClick(120, 80);
+          break;
+        case "synthetic-click":
+          dispatchClick(120, 80);
+          break;
+        case "robotic-combo":
+          for (let step = 1; step <= 12; step += 1) {
+            dispatchMouseMove(step * 40, step * 20);
+            await sleep(16);
+          }
+          for (let step = 0; step < 6; step += 1) {
+            dispatchWheel(120);
+            await sleep(100);
+          }
+          for (const _char of "automated-input") {
+            dispatchKeyDown();
+            await sleep(50);
+          }
+          dispatchClick(120, 80);
+          break;
+        case "organic-combo": {
+          const mousePoints = [
+            [12, 8],
+            [34, 19],
+            [61, 41],
+            [95, 58],
+            [130, 71],
+            [178, 89],
+            [220, 96],
+          ] as const;
+          for (const [x, y] of mousePoints) {
+            dispatchMouseMove(x, y);
+            await sleep(60 + Math.floor(Math.random() * 80));
+          }
+          for (const delta of [120, 84, 210, 36, 160, 52]) {
+            dispatchWheel(delta);
+            await sleep(120 + Math.floor(Math.random() * 120));
+          }
+          for (const _char of "hello world") {
+            dispatchKeyDown();
+            await sleep(80 + Math.floor(Math.random() * 120));
+          }
+          break;
+        }
+        case "idle":
+          break;
+        default: {
+          const neverScenario: never = activeScenario;
+          throw new Error(`Unknown scenario: ${neverScenario}`);
+        }
+      }
+
+      await sleep(durationMs);
+      detector.stop();
+      const result = detector.getResult();
+
       return {
         suspicionScore: result.suspicionScore,
         isLegitClient: result.isLegitClient,
@@ -140,69 +277,47 @@ export async function runBehavioralObserve(
           id: signal.id,
           triggered: signal.triggered,
         })),
+        sampleCounts: result.sampleCounts,
+        observationMs: result.observationMs,
       };
     },
-    { observeMs: durationMs, threshold: scoreThreshold },
+    { activeScenario: scenario, durationMs: observeMs, threshold: scoreThreshold },
   );
 }
 
+/** @deprecated Patchright isolated context ignores Playwright mouse APIs — use runBehavioralScenario */
 export async function linearMousePath(page: Page): Promise<void> {
-  await page.mouse.move(10, 10);
-  for (let step = 1; step <= 12; step += 1) {
-    await page.mouse.move(step * 40, step * 20);
-    await page.waitForTimeout(16);
-  }
+  await runBehavioralScenario(page, "linear-mouse", 0);
 }
 
+/** @deprecated Use runBehavioralScenario */
 export async function organicMousePath(page: Page): Promise<void> {
-  const points = [
-    [12, 8],
-    [34, 19],
-    [61, 41],
-    [95, 58],
-    [130, 71],
-    [178, 89],
-    [220, 96],
-  ] as const;
-
-  await page.mouse.move(points[0][0], points[0][1]);
-  for (const [x, y] of points.slice(1)) {
-    await page.mouse.move(x, y);
-    await page.waitForTimeout(60 + Math.floor(Math.random() * 80));
-  }
+  await runBehavioralScenario(page, "organic-combo", 0);
 }
 
+/** @deprecated Use runBehavioralScenario */
 export async function teleportMouse(page: Page): Promise<void> {
-  await page.mouse.move(10, 10);
-  await page.mouse.move(900, 500);
+  await runBehavioralScenario(page, "teleport-mouse", 0);
 }
 
+/** @deprecated Use runBehavioralScenario */
 export async function linearScroll(page: Page): Promise<void> {
-  for (let step = 0; step < 6; step += 1) {
-    await page.mouse.wheel(0, 120);
-    await page.waitForTimeout(100);
-  }
+  await runBehavioralScenario(page, "linear-scroll", 0);
 }
 
+/** @deprecated Use runBehavioralScenario */
 export async function organicScroll(page: Page): Promise<void> {
-  const deltas = [120, 84, 210, 36, 160, 52];
-  for (const delta of deltas) {
-    await page.mouse.wheel(0, delta);
-    await page.waitForTimeout(120 + Math.floor(Math.random() * 120));
-  }
+  await runBehavioralScenario(page, "organic-combo", 0);
 }
 
+/** @deprecated Use runBehavioralScenario */
 export async function linearTyping(page: Page): Promise<void> {
-  await page.focus("#typing-target");
-  await page.keyboard.type("automated-input", { delay: 50 });
+  await runBehavioralScenario(page, "linear-typing", 0);
 }
 
+/** @deprecated Use runBehavioralScenario */
 export async function organicTyping(page: Page): Promise<void> {
-  await page.focus("#typing-target");
-  const chars = "hello world";
-  for (const char of chars) {
-    await page.keyboard.type(char, { delay: 80 + Math.floor(Math.random() * 120) });
-  }
+  await runBehavioralScenario(page, "organic-combo", 0);
 }
 
 export function triggeredSignalIds(
